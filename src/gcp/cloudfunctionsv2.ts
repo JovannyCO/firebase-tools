@@ -1,6 +1,6 @@
 import * as clc from "colorette";
 
-import { Client } from "../apiv2";
+import { Client, ClientVerbOptions } from "../apiv2";
 import { FirebaseError } from "../error";
 import { functionsV2Origin } from "../api";
 import { logger } from "../logger";
@@ -11,27 +11,21 @@ import * as runtimes from "../deploy/functions/runtimes";
 import * as proto from "./proto";
 import * as utils from "../utils";
 import * as projectConfig from "../functions/projectConfig";
+import {
+  BLOCKING_EVENT_TO_LABEL_KEY,
+  BLOCKING_LABEL,
+  BLOCKING_LABEL_KEY_TO_EVENT,
+  CODEBASE_LABEL,
+  HASH_LABEL,
+} from "../functions/constants";
 
-export const API_VERSION = "v2alpha";
-export const CODEBASE_LABEL = "firebase-functions-codebase";
+export const API_VERSION = "v2";
 
 const client = new Client({
   urlPrefix: functionsV2Origin,
   auth: true,
   apiVersion: API_VERSION,
 });
-
-export const BLOCKING_LABEL = "deployment-blocking";
-
-const BLOCKING_LABEL_KEY_TO_EVENT: Record<string, typeof AUTH_BLOCKING_EVENTS[number]> = {
-  "before-create": "providers/cloud.auth/eventTypes/user.beforeCreate",
-  "before-sign-in": "providers/cloud.auth/eventTypes/user.beforeSignIn",
-};
-
-const BLOCKING_EVENT_TO_LABEL_KEY: Record<typeof AUTH_BLOCKING_EVENTS[number], string> = {
-  "providers/cloud.auth/eventTypes/user.beforeCreate": "before-create",
-  "providers/cloud.auth/eventTypes/user.beforeSignIn": "before-sign-in",
-};
 
 export type VpcConnectorEgressSettings = "PRIVATE_RANGES_ONLY" | "ALL_TRAFFIC";
 export type IngressSettings = "ALLOW_ALL" | "ALLOW_INTERNAL_ONLY" | "ALLOW_INTERNAL_AND_GCLB";
@@ -121,10 +115,12 @@ export interface ServiceConfig {
 
   timeoutSeconds?: number | null;
   availableMemory?: string | null;
+  availableCpu?: string | null;
   environmentVariables?: Record<string, string> | null;
   secretEnvironmentVariables?: SecretEnvVar[] | null;
   maxInstanceCount?: number | null;
   minInstanceCount?: number | null;
+  maxInstanceRequestConcurrency?: number | null;
   vpcConnector?: string | null;
   vpcConnectorEgressSettings?: VpcConnectorEgressSettings | null;
   ingressSettings?: IngressSettings | null;
@@ -268,6 +264,7 @@ function functionsOpLogReject(funcName: string, type: string, err: any): void {
   }
   throw new FirebaseError(`Failed to ${type} function ${funcName}`, {
     original: err,
+    status: err?.context?.response?.statusCode,
     context: { function: funcName },
   });
 }
@@ -357,7 +354,11 @@ async function listFunctionsInternal(
   let pageToken = "";
   while (true) {
     const url = `projects/${projectId}/locations/${region}/functions`;
-    const opts = pageToken === "" ? {} : { queryParams: { pageToken } };
+    // V2 API returns both V1 and V2 Functions. Add filter condition to return only V2 functions.
+    const opts: ClientVerbOptions = { queryParams: { filter: `environment="GEN_2"` } };
+    if (pageToken !== "") {
+      opts.queryParams = { ...opts.queryParams, pageToken };
+    }
     const res = await client.get<Response>(url, opts);
     functions.push(...(res.body.functions || []));
     for (const region of res.body.unreachable || []) {
@@ -468,10 +469,21 @@ export function functionFromEndpoint(
   );
   // Memory must be set because the default value of GCF gen 2 is Megabytes and
   // we use mebibytes
-  const mem: number = endpoint.availableMemoryMb || backend.DEFAULT_MEMORY;
+  const mem = endpoint.availableMemoryMb || backend.DEFAULT_MEMORY;
   gcfFunction.serviceConfig.availableMemory = mem > 1024 ? `${mem / 1024}Gi` : `${mem}Mi`;
   proto.renameIfPresent(gcfFunction.serviceConfig, endpoint, "minInstanceCount", "minInstances");
   proto.renameIfPresent(gcfFunction.serviceConfig, endpoint, "maxInstanceCount", "maxInstances");
+  // N.B. only convert CPU and concurrency fields for 2nd gen functions, once we
+  // eventually use the v2 API to configure both 1st and 2nd gen functions)
+  proto.renameIfPresent(
+    gcfFunction.serviceConfig,
+    endpoint,
+    "maxInstanceRequestConcurrency",
+    "concurrency"
+  );
+  proto.convertIfPresent(gcfFunction.serviceConfig, endpoint, "availableCpu", "cpu", (cpu) => {
+    return String(cpu);
+  });
 
   if (endpoint.vpc) {
     proto.renameIfPresent(gcfFunction.serviceConfig, endpoint.vpc, "vpcConnector", "connector");
@@ -549,7 +561,7 @@ export function functionFromEndpoint(
       ...gcfFunction.labels,
       [BLOCKING_LABEL]:
         BLOCKING_EVENT_TO_LABEL_KEY[
-          endpoint.blockingTrigger.eventType as typeof AUTH_BLOCKING_EVENTS[number]
+          endpoint.blockingTrigger.eventType as (typeof AUTH_BLOCKING_EVENTS)[number]
         ],
     };
   }
@@ -561,6 +573,12 @@ export function functionFromEndpoint(
     };
   } else {
     delete gcfFunction.labels?.[CODEBASE_LABEL];
+  }
+  if (endpoint.hash) {
+    gcfFunction.labels = {
+      ...gcfFunction.labels,
+      [HASH_LABEL]: endpoint.hash,
+    };
   }
   return gcfFunction;
 }
@@ -684,5 +702,17 @@ export function endpointFromFunction(gcfFunction: CloudFunction): backend.Endpoi
     );
   }
   endpoint.codebase = gcfFunction.labels?.[CODEBASE_LABEL] || projectConfig.DEFAULT_CODEBASE;
+  if (gcfFunction.labels?.[HASH_LABEL]) {
+    endpoint.hash = gcfFunction.labels[HASH_LABEL];
+  }
+  const serviceName = gcfFunction.serviceConfig.service;
+  if (!serviceName) {
+    logger.debug(
+      "Got a v2 function without a service name." +
+        "Maybe we've migrated to using the v2 API everywhere and missed this code"
+    );
+  } else {
+    endpoint.runServiceId = utils.last(serviceName.split("/"));
+  }
   return endpoint;
 }

@@ -1,6 +1,2 @@
-- Adds support for media upload protocol to storage emulator (#4869)
-- Adds support to storage emualtor GCS API for /storage/v1/b/:bucketId/o/:objectId url pattern (#4869)
-- Removes extraneous default metadata fields from storage emulator (#4869)
-- Fixes an issue where a blocked upload from the android sdks crashes the storage emulator (#4860)
-- Fix deleting metadata fields in storage emulator (#4889)
-- Fix storage emulator bug where rapid calls to the rules runtime results in no returns and non-resolving promises (#3915)
+- The hosting emulator integration with web frameworks now has improved support for HMR and dev-tools. (#5582)
+- Fixes an issue where `init hosting:github` would hang if it could not access a repository's public key. (#5317)

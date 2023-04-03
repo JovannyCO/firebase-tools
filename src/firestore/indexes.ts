@@ -26,7 +26,8 @@ export class FirestoreIndexes {
   async deploy(
     options: { project: string; nonInteractive: boolean; force: boolean },
     indexes: any[],
-    fieldOverrides: any[]
+    fieldOverrides: any[],
+    databaseId: string = "(default)"
   ): Promise<void> {
     const spec = this.upgradeOldSpec({
       indexes,
@@ -39,8 +40,11 @@ export class FirestoreIndexes {
     const indexesToDeploy: Spec.Index[] = spec.indexes;
     const fieldOverridesToDeploy: Spec.FieldOverride[] = spec.fieldOverrides;
 
-    const existingIndexes: API.Index[] = await this.listIndexes(options.project);
-    const existingFieldOverrides: API.Field[] = await this.listFieldOverrides(options.project);
+    const existingIndexes: API.Index[] = await this.listIndexes(options.project, databaseId);
+    const existingFieldOverrides: API.Field[] = await this.listFieldOverrides(
+      options.project,
+      databaseId
+    );
 
     const indexesToDelete = existingIndexes.filter((index) => {
       return !indexesToDeploy.some((spec) => this.indexMatchesSpec(index, spec));
@@ -100,7 +104,7 @@ export class FirestoreIndexes {
         logger.debug(`Skipping existing index: ${JSON.stringify(index)}`);
       } else {
         logger.debug(`Creating new index: ${JSON.stringify(index)}`);
-        await this.createIndex(options.project, index);
+        await this.createIndex(options.project, index, databaseId);
       }
     }
 
@@ -140,13 +144,16 @@ export class FirestoreIndexes {
       }
     }
 
-    for (const field of fieldOverridesToDeploy) {
+    // Disabling TTL must be executed first in case another field is enabled for
+    // the same collection in the same deployment.
+    const sortedFieldOverridesToDeploy = fieldOverridesToDeploy.sort(sort.compareFieldOverride);
+    for (const field of sortedFieldOverridesToDeploy) {
       const exists = existingFieldOverrides.some((x) => this.fieldMatchesSpec(x, field));
       if (exists) {
         logger.debug(`Skipping existing field override: ${JSON.stringify(field)}`);
       } else {
         logger.debug(`Updating field override: ${JSON.stringify(field)}`);
-        await this.patchField(options.project, field);
+        await this.patchField(options.project, field, databaseId);
       }
     }
 
@@ -165,8 +172,8 @@ export class FirestoreIndexes {
    * List all indexes that exist on a given project.
    * @param project the Firebase project id.
    */
-  async listIndexes(project: string): Promise<API.Index[]> {
-    const url = `/projects/${project}/databases/(default)/collectionGroups/-/indexes`;
+  async listIndexes(project: string, databaseId: string = "(default)"): Promise<API.Index[]> {
+    const url = `/projects/${project}/databases/${databaseId}/collectionGroups/-/indexes`;
     const res = await this.apiClient.get<{ indexes?: API.Index[] }>(url);
     const indexes = res.body.indexes;
     if (!indexes) {
@@ -193,9 +200,12 @@ export class FirestoreIndexes {
    * List all field configuration overrides defined on the given project.
    * @param project the Firebase project.
    */
-  async listFieldOverrides(project: string): Promise<API.Field[]> {
-    const parent = `projects/${project}/databases/(default)/collectionGroups/-`;
-    const url = `/${parent}/fields?filter=indexConfig.usesAncestorConfig=false`;
+  async listFieldOverrides(
+    project: string,
+    databaseId: string = "(default)"
+  ): Promise<API.Field[]> {
+    const parent = `projects/${project}/databases/${databaseId}/collectionGroups/-`;
+    const url = `/${parent}/fields?filter=indexConfig.usesAncestorConfig=false OR ttlConfig:*`;
 
     const res = await this.apiClient.get<{ fields?: API.Field[] }>(url);
     const fields = res.body.fields;
@@ -236,6 +246,7 @@ export class FirestoreIndexes {
       return {
         collectionGroup: parsedName.collectionGroupId,
         fieldPath: parsedName.fieldPath,
+        ttl: !!field.ttlConfig,
 
         indexes: fieldIndexes.map((index) => {
           const firstField = index.fields[0];
@@ -339,6 +350,10 @@ export class FirestoreIndexes {
     validator.assertHas(field, "fieldPath");
     validator.assertHas(field, "indexes");
 
+    if (typeof field.ttl !== "undefined") {
+      validator.assertType("ttl", field.ttl, "boolean");
+    }
+
     field.indexes.forEach((index: any) => {
       validator.assertHasOneOf(index, ["arrayConfig", "order"]);
 
@@ -363,8 +378,12 @@ export class FirestoreIndexes {
    * @param project the Firebase project.
    * @param spec the new field override specification.
    */
-  async patchField(project: string, spec: Spec.FieldOverride): Promise<any> {
-    const url = `/projects/${project}/databases/(default)/collectionGroups/${spec.collectionGroup}/fields/${spec.fieldPath}`;
+  async patchField(
+    project: string,
+    spec: Spec.FieldOverride,
+    databaseId: string = "(default)"
+  ): Promise<any> {
+    const url = `/projects/${project}/databases/${databaseId}/collectionGroups/${spec.collectionGroup}/fields/${spec.fieldPath}`;
 
     const indexes = spec.indexes.map((index) => {
       return {
@@ -379,30 +398,40 @@ export class FirestoreIndexes {
       };
     });
 
-    const data = {
+    let data = {
       indexConfig: {
         indexes,
       },
     };
 
-    await this.apiClient.patch(url, data);
+    if (spec.ttl) {
+      data = Object.assign(data, {
+        ttlConfig: {},
+      });
+    }
+
+    if (typeof spec.ttl !== "undefined") {
+      await this.apiClient.patch(url, data);
+    } else {
+      await this.apiClient.patch(url, data, { queryParams: { updateMask: "indexConfig" } });
+    }
   }
 
   /**
-   * Delete an existing index on the specified project.
+   * Delete an existing field overrides on the specified project.
    */
   deleteField(field: API.Field): Promise<any> {
     const url = field.name;
     const data = {};
 
-    return this.apiClient.patch(`/${url}`, data, { queryParams: { updateMask: "indexConfig" } });
+    return this.apiClient.patch(`/${url}`, data);
   }
 
   /**
    * Create a new index on the specified project.
    */
-  createIndex(project: string, index: Spec.Index): Promise<any> {
-    const url = `/projects/${project}/databases/(default)/collectionGroups/${index.collectionGroup}/indexes`;
+  createIndex(project: string, index: Spec.Index, databaseId: string = "(default)"): Promise<any> {
+    const url = `/projects/${project}/databases/${databaseId}/collectionGroups/${index.collectionGroup}/indexes`;
     return this.apiClient.post(url, {
       fields: index.fields,
       queryScope: index.queryScope,
@@ -469,6 +498,16 @@ export class FirestoreIndexes {
 
     if (parsedName.fieldPath !== spec.fieldPath) {
       return false;
+    }
+
+    if (typeof spec.ttl !== "undefined" && util.booleanXOR(!!field.ttlConfig, spec.ttl)) {
+      return false;
+    } else if (!!field.ttlConfig && typeof spec.ttl === "undefined") {
+      utils.logLabeledBullet(
+        "firestore",
+        `there are TTL field overrides for collection ${spec.collectionGroup} defined in your project that are not present in your ` +
+          "firestore indexes file. The TTL policy won't be deleted since is not specified as false."
+      );
     }
 
     const fieldIndexes = field.indexConfig.indexes || [];
@@ -618,6 +657,10 @@ export class FirestoreIndexes {
       });
     } else {
       result += " (no indexes)";
+    }
+    const fieldTtl = field.ttlConfig;
+    if (fieldTtl) {
+      result += ` TTL(${fieldTtl.state})`;
     }
 
     return result;

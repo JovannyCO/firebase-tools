@@ -359,6 +359,18 @@ export type Endpoint = TargetIds &
     // This is a temporary fix to address https://github.com/firebase/firebase-tools/issues/4171
     // GCFv1 can be http or https and GCFv2 is always https
     securityLevel?: gcf.SecurityLevel;
+
+    // "Hash" is a value derived from function labels that is used to check if there are any changes
+    // between the serverside and local copies of the function.
+    hash?: string;
+
+    // Marked as true if a user specifically called this function or codebase with the --only flag.
+    targetedByOnly?: boolean;
+
+    // Output only. For v2 functions, this is the run service ID.
+    // This may eventually be different than id because GCF is going to start
+    // doing name translations
+    runServiceId?: string;
   };
 
 export interface RequiredAPI {
@@ -477,18 +489,6 @@ export function scheduleIdForFunction(cloudFunction: TargetIds): string {
   return `firebase-schedule-${cloudFunction.id}-${cloudFunction.region}`;
 }
 
-interface PrivateContextFields {
-  existingBackend: Backend;
-  loadedExistingBackend?: boolean;
-
-  // NOTE(inlined): Will this need to become a more nuanced data structure
-  // if we support GCFv1, v2, and Run?
-  unreachableRegions: {
-    gcfV1: string[];
-    gcfV2: string[];
-  };
-}
-
 /**
  * A caching accessor of the existing backend.
  * The method explicitly loads Cloud Functions from their API but implicitly deduces
@@ -502,14 +502,14 @@ interface PrivateContextFields {
  * @return The backend
  */
 export async function existingBackend(context: Context, forceRefresh?: boolean): Promise<Backend> {
-  const ctx = context as Context & PrivateContextFields;
-  if (!ctx.loadedExistingBackend || forceRefresh) {
-    await loadExistingBackend(ctx);
+  if (!context.loadedExistingBackend || forceRefresh) {
+    await loadExistingBackend(context);
   }
-  return ctx.existingBackend;
+  // loadExisting guarantees the validity of existingBackend and unreachableRegions
+  return context.existingBackend!;
 }
 
-async function loadExistingBackend(ctx: Context & PrivateContextFields): Promise<void> {
+async function loadExistingBackend(ctx: Context): Promise<void> {
   ctx.loadedExistingBackend = true;
   // Note: is it worth deducing the APIs that must have been enabled for this backend to work?
   // it could reduce redundant API calls for enabling the APIs.
@@ -568,9 +568,8 @@ async function loadExistingBackend(ctx: Context & PrivateContextFields): Promise
  * @param want The desired backend. Can be backend.empty() to only warn about unavailability.
  */
 export async function checkAvailability(context: Context, want: Backend): Promise<void> {
-  const ctx = context as Context & PrivateContextFields;
-  if (!ctx.loadedExistingBackend) {
-    await loadExistingBackend(ctx);
+  if (!context.loadedExistingBackend) {
+    await loadExistingBackend(context);
   }
   const gcfV1Regions = new Set();
   const gcfV2Regions = new Set();
@@ -582,13 +581,13 @@ export async function checkAvailability(context: Context, want: Backend): Promis
     }
   }
 
-  const neededUnreachableV1 = ctx.unreachableRegions.gcfV1.filter((region) =>
+  const neededUnreachableV1 = context.unreachableRegions?.gcfV1.filter((region) =>
     gcfV1Regions.has(region)
   );
-  const neededUnreachableV2 = ctx.unreachableRegions.gcfV2.filter((region) =>
+  const neededUnreachableV2 = context.unreachableRegions?.gcfV2.filter((region) =>
     gcfV2Regions.has(region)
   );
-  if (neededUnreachableV1.length) {
+  if (neededUnreachableV1?.length) {
     throw new FirebaseError(
       "The following Cloud Functions regions are currently unreachable:\n\t" +
         neededUnreachableV1.join("\n\t") +
@@ -596,7 +595,7 @@ export async function checkAvailability(context: Context, want: Backend): Promis
     );
   }
 
-  if (neededUnreachableV2.length) {
+  if (neededUnreachableV2?.length) {
     throw new FirebaseError(
       "The following Cloud Functions V2 regions are currently unreachable:\n\t" +
         neededUnreachableV2.join("\n\t") +
@@ -604,20 +603,20 @@ export async function checkAvailability(context: Context, want: Backend): Promis
     );
   }
 
-  if (ctx.unreachableRegions.gcfV1.length) {
+  if (context.unreachableRegions?.gcfV1.length) {
     utils.logLabeledWarning(
       "functions",
       "The following Cloud Functions regions are currently unreachable:\n" +
-        ctx.unreachableRegions.gcfV1.join("\n") +
+        context.unreachableRegions.gcfV1.join("\n") +
         "\nCloud Functions in these regions won't be deleted."
     );
   }
 
-  if (ctx.unreachableRegions.gcfV2.length) {
+  if (context.unreachableRegions?.gcfV2.length) {
     utils.logLabeledWarning(
       "functions",
       "The following Cloud Functions V2 regions are currently unreachable:\n" +
-        ctx.unreachableRegions.gcfV2.join("\n") +
+        context.unreachableRegions.gcfV2.join("\n") +
         "\nCloud Functions in these regions won't be deleted."
     );
   }

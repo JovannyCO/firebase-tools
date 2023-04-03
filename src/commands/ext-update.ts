@@ -1,7 +1,6 @@
 import * as clc from "colorette";
-// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-var-requires
-const { marked } = require("marked");
-import TerminalRenderer = require("marked-terminal");
+import { marked } from "marked";
+import * as TerminalRenderer from "marked-terminal";
 
 import { checkMinRequiredVersion } from "../checkMinRequiredVersion";
 import { Command } from "../command";
@@ -22,7 +21,7 @@ import * as refs from "../extensions/refs";
 import { getProjectId } from "../projectUtils";
 import { requirePermissions } from "../requirePermissions";
 import * as utils from "../utils";
-import { previews } from "../previews";
+import * as experiments from "../experiments";
 import * as manifest from "../extensions/manifest";
 import { Options } from "../options";
 import * as askUserForEventsConfig from "../extensions/askUserForEventsConfig";
@@ -36,7 +35,7 @@ marked.setOptions({
  */
 export const command = new Command("ext:update <extensionInstanceId> [updateSource]")
   .description(
-    previews.extdev
+    experiments.isEnabled("extdev")
       ? "update an existing extension instance to the latest version or from a local or URL source"
       : "update an existing extension instance to the latest version"
   )
