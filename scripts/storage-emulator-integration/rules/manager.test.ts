@@ -21,19 +21,12 @@ const EMULATOR_LOAD_RULESET_DELAY_MS = 2000;
 describe("Storage Rules Manager", function () {
   const opts = { method: RulesetOperationMethod.GET, file: {}, path: "/b/bucket_0/o/" };
   const projectId = "demo-project-id";
-  let rulesRuntime: StorageRulesRuntime;
   let rulesManager: StorageRulesManager;
 
   // eslint-disable-next-line @typescript-eslint/no-invalid-this
   this.timeout(TIMEOUT_LONG);
 
-  beforeEach(async () => {
-    rulesRuntime = new StorageRulesRuntime();
-    await rulesRuntime.start();
-  });
-
   afterEach(async () => {
-    rulesRuntime.stop();
     await rulesManager.stop();
   });
 
@@ -42,7 +35,7 @@ describe("Storage Rules Manager", function () {
       { resource: "bucket_0", rules: StorageRulesFiles.readWriteIfTrue },
       { resource: "bucket_1", rules: StorageRulesFiles.readWriteIfAuth },
     ];
-    rulesManager = createStorageRulesManager(rules, rulesRuntime);
+    rulesManager = createStorageRulesManager(rules, await getRuntime());
     await rulesManager.start();
 
     const bucket0Ruleset = rulesManager.getRuleset("bucket_0");
@@ -57,7 +50,7 @@ describe("Storage Rules Manager", function () {
   });
 
   it("should load single ruleset on start", async () => {
-    rulesManager = createStorageRulesManager(StorageRulesFiles.readWriteIfTrue, rulesRuntime);
+    rulesManager = createStorageRulesManager(StorageRulesFiles.readWriteIfTrue, await getRuntime());
     await rulesManager.start();
 
     const ruleset = rulesManager.getRuleset("bucket");
@@ -71,7 +64,7 @@ describe("Storage Rules Manager", function () {
     appendBytes(testDir, fileName, Buffer.from(StorageRulesFiles.readWriteIfTrue.content));
 
     const sourceFile = getSourceFile(testDir, fileName);
-    rulesManager = createStorageRulesManager(sourceFile, rulesRuntime);
+    rulesManager = createStorageRulesManager(sourceFile, await getRuntime());
     await rulesManager.start();
 
     expect(await isPermitted({ ...opts, ruleset: rulesManager.getRuleset("bucket")!, projectId }))
@@ -86,6 +79,12 @@ describe("Storage Rules Manager", function () {
       .to.be.false;
   });
 });
+
+async function getRuntime(): Promise<StorageRulesRuntime> {
+  const runtime = new StorageRulesRuntime();
+  await runtime.start();
+  return runtime;
+}
 
 function getSourceFile(testDir: string, fileName: string): SourceFile {
   const filePath = `${testDir}/${fileName}`;
