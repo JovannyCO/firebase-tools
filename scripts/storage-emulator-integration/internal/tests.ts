@@ -23,7 +23,7 @@ describe("Storage emulator internal endpoints", () => {
     await test.startEmulators(["--only", "auth,storage"]);
   });
 
-  beforeEach(async function (this) {
+  beforeEach(function (this) {
     this.timeout(TEST_SETUP_TIMEOUT);
     // Reset emulator to default rules.
     // await supertest(STORAGE_EMULATOR_HOST)
