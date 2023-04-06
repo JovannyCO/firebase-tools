@@ -19,15 +19,16 @@ import * as path from "path";
 const EMULATOR_LOAD_RULESET_DELAY_MS = 2000;
 
 describe("Storage Rules Manager", function () {
-  const rulesRuntime = new StorageRulesRuntime();
   const opts = { method: RulesetOperationMethod.GET, file: {}, path: "/b/bucket_0/o/" };
   const projectId = "demo-project-id";
+  let rulesRuntime: StorageRulesRuntime;
   let rulesManager: StorageRulesManager;
 
   // eslint-disable-next-line @typescript-eslint/no-invalid-this
   this.timeout(TIMEOUT_LONG);
 
   beforeEach(async () => {
+    rulesRuntime = new StorageRulesRuntime();
     await rulesRuntime.start();
   });
 
