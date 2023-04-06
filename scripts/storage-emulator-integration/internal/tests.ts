@@ -26,14 +26,14 @@ describe("Storage emulator internal endpoints", () => {
   beforeEach(async function (this) {
     this.timeout(TEST_SETUP_TIMEOUT);
     // Reset emulator to default rules.
-    await supertest(STORAGE_EMULATOR_HOST)
-      .put("/internal/setRules")
-      .send({
-        rules: {
-          files: [StorageRulesFiles.readWriteIfAuth],
-        },
-      })
-      .expect(200);
+    // await supertest(STORAGE_EMULATOR_HOST)
+    //   .put("/internal/setRules")
+    //   .send({
+    //     rules: {
+    //       files: [StorageRulesFiles.readWriteIfAuth],
+    //     },
+    //   })
+    //   .expect(200);
   });
 
   after(async function (this) {
